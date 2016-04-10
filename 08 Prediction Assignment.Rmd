@@ -1,0 +1,142 @@
+---
+title: "Human Activity Recognition"
+output: 
+  html_document:
+    keep_md: true
+---
+
+## Executive Summary
+
+The goal of this project is to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants to build a model to predict how well a person does his/her exercise.
+
+The training data for this project are available here:  
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+More information is available from the website here:  
+http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+The prediction model built is also applied to the 20 different test cases from the website:  
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+
+## Data Pre-processing
+
+``` {r echo = FALSE}
+library(lattice)
+library(ggplot2)
+library(caret)
+library(rpart)
+library(tree)
+library(ipred)
+library(ISLR)
+library(reshape2)
+```
+
+Read in the data.
+``` {r results = "hold"}
+data <- read.csv("pml-training.csv")
+testcases <- read.csv("pml-testing.csv")
+dim(data)
+```
+
+Remove the non-predicting variables from the data.
+```{r results = "hold"}
+data <- subset(data, select=-c(X, user_name, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp, new_window, num_window))
+testcases <- subset(testcases, select=-c(X, user_name, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp, new_window, num_window))
+dim(data)
+```
+
+Remove variables with more than 10% NA values.
+```{r results = "hold"}
+na.count <- apply(data, 2, FUN=function(x){sum(is.na(x))})/nrow(data)
+data <- data[, which(na.count<0.1)]
+testcases <- testcases[, which(na.count<0.1)]
+dim(data)
+```
+
+Remove all variables with near zero values.
+```{r results = "hold"}
+nzv <- nearZeroVar(data)
+data <- data[, -nzv]
+testcases <- testcases[, -nzv]
+dim(data)
+```
+
+Convert all remaining variables to numeric.
+```{r results = "hold"}
+for (i in 1:52) data[,i] <- as.numeric(data[,i])
+for (i in 1:52) testcases[,i] <- as.numeric(testcases[,i])
+```
+
+Remove all highly correlated variables.
+```{r results = "hold"}
+corr <- cor(data[,-53])
+corr.var <- findCorrelation(corr, cutoff=0.8)
+
+data <- data[, -corr.var]
+testcases <- testcases[, -corr.var]
+dim(data)
+```
+
+Split the data into training and testing set for cross validation.
+```{r results = "hold"}
+set.seed(333)
+inTrain <- createDataPartition(y=data$classe, p=0.7, list=FALSE)
+training <- data[inTrain,]
+testing <- data[-inTrain,]
+```
+
+
+## Predicting with rpart
+
+Fit a model using the 'rpart' function on the training data.
+```{r results = "hold"}
+set.seed(333)
+fitRpart <- rpart(classe~., data=training)
+print(fitRpart)
+```
+
+Apply the model on the testing data to check the performance of the model.
+```{r results = "hold"}
+predRpart<- predict(fitRpart, newdata=testing, type='class')
+os.error.rpart <- sum(predRpart != testing$classe)/nrow(testing) * 100
+confusionMatrix(testing$classe, predRpart)$table
+```
+This is a very bushy tree. The out-of-sample error is `r signif(os.error.rpart, 3)`%, which is rather high. For the model to be usable, tree pruning is necessary to improve its performance.
+
+##Predicting with bagging
+Fit a model using the 'bagging' function on the training data.
+```{r results = "hold"}
+set.seed(333)
+fitBag <- bagging(classe~., data=training)
+print(fitBag)
+```
+
+Apply the model on the testing data to check the performance of the model.
+```{r results = "hold"}
+predBag <- predict(fitBag, newdata=testing, type='class')
+os.error.bag <- sum(predBag != testing$classe)/nrow(testing) * 100
+confusionMatrix(testing$classe, predBag)$table
+```
+The out-of-sample error is `r signif(os.error.bag, 3)`%, which is very low. This means that the model is able to predict the outcome very accurately.
+
+## Conclusion
+
+Comparing the out-of-sample errors from the two models, the model built using the 'bagging' function (`r signif(os.error.bag, 3)`%) is a much more accurate model than the one built using 'rpart' (`r signif(os.error.rpart, 3)`%).
+
+```{r results = "hold"}
+res <- data.frame(id=row.names(testing), testing=testing$classe, bagging=predBag, rpart=predRpart)
+res <- melt(res, id.vars="id", measure.vars=c("testing", "bagging", "rpart"))
+res <- table(res$variable, res$value)
+barplot(res, col=c('black', 'blue', 'red'), main="Classification of classe", beside=TRUE)
+legend("topright", lty=c(1, 1, 1), col=c("black", "blue", "red"), legend=rownames(res), cex=0.7)
+```
+
+Hence, we shall apply the bagging model to the 20 test cases from the website.
+
+```{r results = "hold"}
+testcases$pred_classe <- predict(fitBag, newdata=testcases, type='class')
+testcases[,c('problem_id', 'pred_classe')]
+```
+
+
